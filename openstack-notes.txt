@@ -1,0 +1,881 @@
+# Install Ubuntu base system with OpenSSH.
+
+SCSI1 (2,0,0)
+sda1: 1Gb physical boot partition
+sda2: 100Gb linux
+sda3: 34Gb swap
+sda5: 1.7Tb extended partition, to be used for volume group nova-volumes
+
+sdb1: @@TBD 
+sdb2: 
+sdb3: 
+sdb5:
+
+ufw enable
+ufw allow ssh
+apt-get update
+apt-get upgrade
+apt-get install denyhosts
+
+addgroup --system remote
+adduser graham remote
+* Add to /etc/ssh/sshd_config
+service ssh restart
+
+adduser itsupport
+adduser itsupport adm
+adduser itsupport remote
+
+
+# Install OpenStack
+
+Instructions at http://www.hastexo.com/resources/docs/installing-openstack-essex-20121-ubuntu-1204-precise-pangolin
+
+Other links:
+- http://www.stackgeek.com/guides/gettingstarted.html
+
+
+## Step 1: Prepare your System
+
+Install NTP by issuing this command on the command line:
+
+    apt-get install ntp
+
+Then, open /etc/ntp.conf in your favourite editor and add these lines:
+
+    server ntp.ubuntu.com iburst server 127.127.1.0 fudge 127.127.1.0 stratum 10
+
+Restart NTP by issuing the command
+
+    service ntp restart
+
+to finish this part of the installation.
+
+Next, install the tgt target, which features an iscsi target 
+(we'll need it for nova-volume):
+
+tgt: Linux SCSI target user-space tools
+
+    apt-get install tgt
+
+Then start it with 
+
+    service tgt start
+
+Given that we'll be running nova-compute on this machine as well, we'll also need the openiscsi-client.
+Install it with:
+
+    apt-get install open-iscsi open-iscsi-utils
+
+?? did we need this if using local disks?
+
+Next, we need to make sure that our network is working as expected. As pointed out earlier, the machine we're doing this on has two network interfaces, eth0 and eth1. eth0 is the machine's link to the outside world, eth1 is the interface we'll be using for our virtual machines. We'll also make nova bridge clients via eth0 into the internet. To achieve this kind of setup, first create the according network configuration in /etc/network/interfaces (assuming that you are not using NetworkManager). 
+
+Ours looks like this:
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+auto eth0
+iface eth0 inet static
+        address 129.67.24.14
+        netmask 255.255.252.0
+        network 129.67.24.0
+        broadcast 129.67.27.255
+        gateway 129.67.27.254
+        # dns-* options are implemented by the resolvconf package, if installed
+        dns-nameservers 129.67.1.1 163.1.2.1 129.67.1.180
+        dns-search zoo.ox.ac.uk
+
+# Network interface for VMs
+auto eth1
+iface eth1 inet static
+        address 129.67.24.28
+        netmask 255.255.252.0
+        network 129.67.24.0
+        broadcast 129.67.27.255
+        gateway 129.67.27.254
+        # dns-* options are implemented by the resolvconf package, if installed
+        dns-nameservers 129.67.1.1 163.1.2.1 129.67.1.180
+        dns-search zoo.ox.ac.uk
+
+As you can see, the "public" network here is 10.42.0.0/24 while the "private" network (within which our VMs will be residing) is 192.168.22.0/24. This machine's IP address in the public network is 10.42.0.6 and we'll be using this IP in configuration files later on (except for when connecting to MySQL, which we'll by connecting to 127.0.0.1). 
+
+?? Should there be a different network for the administrative interface?
+
+    root@zoo-patmos1:/etc/network# service networking restart
+    stop: Unknown instance: 
+    networking stop/waiting
+    root@zoo-patmos1:/etc/network# ifconfig
+    eth0      Link encap:Ethernet  HWaddr 78:2b:cb:24:33:37  
+              inet addr:129.67.24.14  Bcast:129.67.27.255  Mask:255.255.252.0
+              inet6 addr: fe80::7a2b:cbff:fe24:3337/64 Scope:Link
+              UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+              RX packets:3592 errors:0 dropped:2480 overruns:0 frame:0
+              TX packets:62 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:1000 
+              RX bytes:405780 (405.7 KB)  TX bytes:8144 (8.1 KB)
+              Interrupt:36 Memory:d8000000-d8012800 
+
+    eth1      Link encap:Ethernet  HWaddr 78:2b:cb:24:33:38  
+              inet addr:129.67.24.28  Bcast:129.67.27.255  Mask:255.255.252.0
+              inet6 addr: fe80::7a2b:cbff:fe24:3338/64 Scope:Link
+              UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+              RX packets:5 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:3 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:1000 
+              RX bytes:1301 (1.3 KB)  TX bytes:250 (250.0 B)
+              Interrupt:48 Memory:da000000-da012800 
+
+    lo        Link encap:Local Loopback  
+              inet addr:127.0.0.1  Mask:255.0.0.0
+              inet6 addr: ::1/128 Scope:Host
+              UP LOOPBACK RUNNING  MTU:16436  Metric:1
+              RX packets:20 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:20 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:0 
+              RX bytes:1776 (1.7 KB)  TX bytes:1776 (1.7 KB)
+
+    root@zoo-patmos1:/etc/network# 
+
+
+
+After changing your network interfaces definition accordingly, make sure that the bridge-utils
+package is installed. Should it be missing on your system, install it with
+
+    apt-get install bridge-utils
+
+Then, restart your network with
+
+    /etc/init.d/networking restart
+
+We'll also need RabbitMQ, an AMQP-implementation, as that is what all OpenStack components use
+to communicate with eath other, and memcached.
+
+    apt-get install rabbitmq-server memcached python-memcache
+    
+As we'll also want to run KVM virtual machines on this very same host, we'll
+need KVM and libvirt, which OpenStack uses to control virtual machines. Install these packages
+with: 
+
+    apt-get install kvm libvirt-bin
+
+Last but not least, make sure you have an LVM volume
+group called nova-volumes; the nova-volume service will need such a VG later on.
+
+    apt-get install lvm2
+    pvcreate /dev/sda5
+    pvdisplay
+    vgcreate nova-volumes /dev/sda5
+    vgdisplay
+
+----
+
+# Step 2: Install MySQL and create the necessary databases and users
+
+Nova and glance will use MySQL to store their runtime data. To make sure they can do that,
+we'll install and set up MySQL. Do this:
+
+    apt-get install mysql-server python-mysqldb
+
+
+When the package installation is done and you want other machines (read: OpenStack computing
+nodes) to be able to talk to that MySQL database, too, open up /etc/mysql/my.cnf in your
+favourite editor and change this line:
+
+    bind-address = 127.0.0.1
+
+to look like this:
+
+    bind-address = 0.0.0.0
+
+Then, restart MySQL:
+
+    service mysql restart
+
+Now create the user accounts in mysql and grant them access on the according databases, which
+you need to create, too:
+
+    mysql -u root -p
+
+enter password, then:
+
+    CREATE DATABASE nova; 
+    GRANT ALL PRIVILEGES ON nova.* TO 'novadbadmin'@'%' IDENTIFIED BY 'dieD9Mie'; 
+
+    CREATE DATABASE glance;
+    GRANT ALL PRIVILEGES ON glance.* TO 'glancedbadmin'@'%' IDENTIFIED BY 'ohC3teiv'; 
+
+    CREATE DATABASE keystone; 
+    GRANT ALL PRIVILEGES ON keystone.* TO 'keystonedbadmin'@'%' IDENTIFIED BY 'Ue0Ud7ra'; 
+
+----
+
+# Step 3: Install and configure Keystone
+
+@@review 'zoo-patmos':  *** use a stronger password here ***
+-- /etc/keystone/keystone.conf
+-- keystone_data.sh
+-- /etc/glance/glance-api-paste.ini
+-- /etc/glance/glance-registry-paste.ini
+-- /etc/nova/api-paste.ini
+
+We can finally get to OpenStack now and we'll start by installing the Identity component,
+codenamed Keystone. Install the according packages:
+
+    apt-get install keystone python-keystone python-mysqldb python-keystoneclient
+
+Then, open /etc/keystone/keystone.conf in an editor and make sure to set a value for admin_token. We'll use "zoo-patmos".
+
+Scroll down to the section starting with [sql]. Change it to match the database settings that we defined for Keystone in step 2 (creating the databases):
+
+    [sql]
+    connection =  mysql://keystonedbadmin:Ue0Ud7ra@129.67.24.14/keystone
+    idle_timeout = 200
+
+Restart Keystone by issuing this command:
+
+    service keystone restart
+
+Then make Keystone create its tables within the freshly created keystone database:
+
+    keystone-manage db_sync
+
+The next step is to fill Keystone with actual data. You can use the script attached to this blog entry entitled keystone_data.sh_.txt. It's courtesy of the Devstack project with some adaptions. Rename the file to keystone_data.sh. Be sure to replace the admin password (ADMIN_PASSWORD variable) with a new value, and the value for SERVICE_TOKEN with the entry you specified in keystone.conf for admin_token earlier. Then just make the script executable and call it; if everything goes well, it should deliver a return code of 0.
+
+Last but not least, you'll also want to define endpoints in Keystone. Use the endpoints.sh._txt script attached to this text to do that; rename the script to endpoints.sh and make sure it's executable. It takes several parameters - a typical call would look like this:
+
+./endpoints.sh -m 129.67.24.14 \
+               -D keystone \
+               -u keystonedbadmin \
+               -p Ue0Ud7ra \
+               -K 129.67.24.14 \
+               -S 129.67.24.14 \
+               -R RegionOne \
+               -E "http://localhost:35357/v2.0" \
+               -T zoo-patmos
+
+(Note: this command uses both mysql account/password and keystone service token/endpoint)
+
+The values used have the following meanings:
+
+-m 129.67.24.14 - the host where your MySQL database is running (as defined in step 2)
+
+-D keystone - the database that belongs to Keystone in MySQL (as defined in step 2)
+
+-u keystonedbadmin - the name of the keystone user that may access the mysql database (as
+defined in step 2)
+
+-p Ue0Ud7ra - the password of the keystone MySQL user to access the database (as defined in
+step 2)
+
+-K 129.67.24.14 - the host where all your OpenStack services will initially run
+
+-S 129.67.24.14 - Should you wish to run Swift at a later point, put in the IP address of the
+swift-proxy server here.
+
+-R RegionOne - the standard region for your endpoints; leave unchanged when following this
+howto.
+
+-E "http://localhost:35357/v2.0" - the keystone endpoint for user authentication; leave
+unchanged when following this howto.
+
+-T zoo-patmos - the token you put into keystone.conf.
+
+Replace the values above to match your setup
+(especially the values for the -K and -S parameters).
+
+Notes:
+  tennant = group;  e.g. admin, service, demo; controls set of resources
+  user = individual
+  role = permission(?), associated with a tenant/user pairing
+  service = 
+
+----
+
+# Step 4: Install and configure Glance
+
+The next step on our way to OpenStack is its Image Service, codenamed Glance. First, install
+the packages necessary for it:
+
+    apt-get install glance glance-api glance-client glance-common glance-registry python-glance
+
+When that is done, open /etc/glance/glance-api-paste.ini in an editor and scroll down to the
+end of the document. You'll see these three lines at its very end:
+
+    admin_tenant_name = %SERVICE_TENANT_NAME%
+    admin_user = %SERVICE_USER%
+    admin_password = %SERVICE_PASSWORD%
+
+Using:
+    admin_tenant_name = service
+    admin_user = glance
+    admin_password = @@zoo-patmos
+
+Fill in values here appropriate for your setup. If you used the keystone_data.sh script from this site, then your admin_tenant_name will be service and your admin_user will be glance. admin_password is the password you defined for ADMIN_PASSWORD in keystone_data.sh, so use the same value here, too.
+
+After this, open /etc/glance/glance-registry-paste.ini and scroll to that file's end, too.  Adapt it in the same way you adapted /etc/glance/glance-api-paste.ini earlier.
+
+Open /etc/glance/glance-registry.conf now and scroll down to the line starting with sql_connection. This is where we tell Glance to use MySQL; according to the MySQL configuration we created earlier, the sql_connection-line for this example would look like this:
+
+    sql_connection = mysql://glancedbadmin:ohC3teiv@129.67.24.14/glance
+
+It's important to use the machine's actual IP in this example and not 127.0.0.1! After this, scroll down until the end of the document and add these two lines:
+
+    [paste_deploy]
+    flavor = keystone
+
+These two lines instruct the Glance Registry to use Keystone for authentication, which is what we want. Now we need to do the same for the Glance API. Open /etc/glance/glance-api.conf and add these two lines at the end of the document:
+
+    [paste_deploy]
+    flavor = keystone
+
+Afterwards, you need to initially synchronize the Glance database by running these commands:
+
+    glance-manage version_control 0
+    glance-manage db_sync
+
+?? The final command displays this
+
+    /usr/lib/python2.7/dist-packages/glance/registry/db/migrate_repo/versions/
+      003_add_disk_format.py:47: SADeprecationWarning: useexisting is deprecated.  
+      Use extend_existing.useexisting=True)
+
+It's time to restart Glance now:
+
+    ls
+
+Now what's the best method to verify that Glance is working as expected? The glance command line utility can do that for us, but to work properly, it needs to know how we want to authenticate ourselves to Glance (and keystone, subsequently). This is a very good moment to define four environmental variables that we'll need continously when working with OpenStack: OS_TENANT_NAME, OS_USERNAME, OS_PASSWORD and OS_AUTH_URL. Here's what they should look like in our example scenario:
+
+    export OS_TENANT_NAME=service
+    export OS_USERNAME=glance
+    export OS_PASSWORD=@@zoo-patmos
+    export OS_AUTH_URL="http://localhost:5000/v2.0/"
+
+The first three entries are identical with what you inserted into Glance's API configuration files earlier and the entry for OS_AUTH_URL is mostly generic and should just work. After exporting these variables, you should be able to do "glance index" and get no output at all in return (but the return code will be 0; check with echo $?). If that's the case, Glance is setup correctly and properly connects with Keystone. Now let's add our first image!
+
+We'll be using a Ubuntu UEC image for this. Download one:
+
+    wget http://uec-images.ubuntu.com/releases/12.04/release/ubuntu-12.04-server-cloudimg-amd64-disk1.img
+
+Then add this image to Glance:
+
+    glance add name="Ubuntu 12.04 cloudimg amd64" is_public=true container_format=ovf disk_format=qcow2 < ubuntu-12.04-server-cloudimg-amd64-disk1.img
+    
+After this, if you do
+
+    glance index
+
+once more, you should be seeing the freshly added image.
+
+
+----
+
+Step 5: Install and configure Nova
+
+OpenStack Compute, codenamed Nova, is by far the most important and the most substantial openstack component. Whatever you do when it comes to managing VMs will be done by Nova in the background. The good news is: Nova is basically controlled by one configuration file, /etc/nova/nova.conf. Get started by installing all nova-related components:
+
+apt-get install nova-api nova-cert nova-common nova-compute nova-compute-kvm nova-doc nova-network nova-objectstore nova-scheduler nova-volume nova-consoleauth novnc python-nova python-novaclient
+
+Then, open /etc/nova/nova.conf and replace everything in there with these lines:
+
+--dhcpbridge_flagfile=/etc/nova/nova.conf
+--dhcpbridge=/usr/bin/nova-dhcpbridge
+--logdir=/var/log/nova
+--state_path=/var/lib/nova
+--lock_path=/var/lock/nova
+--allow_admin_api=true
+--use_deprecated_auth=false
+--auth_strategy=keystone
+--scheduler_driver=nova.scheduler.simple.SimpleScheduler
+--s3_host=129.67.24.14
+--ec2_host=129.67.24.14
+--rabbit_host=129.67.24.14
+--cc_host=129.67.24.14
+--nova_url=http://129.67.24.14:8774/v1.1/
+--routing_source_ip=129.67.24.14
+--glance_api_servers=129.67.24.14:9292
+--image_service=nova.image.glance.GlanceImageService
+--iscsi_ip_prefix=192.168.22
+--sql_connection=mysql://novadbadmin:dieD9Mie@129.67.24.14/nova
+--ec2_url=http://129.67.24.14:8773/services/Cloud
+--keystone_ec2_url=http://129.67.24.14:5000/v2.0/ec2tokens
+--api_paste_config=/etc/nova/api-paste.ini
+--libvirt_type=kvm
+--libvirt_use_virtio_for_bridges=true
+--start_guests_on_host_boot=true
+--resume_guests_state_on_host_boot=true
+--vnc_enabled=true
+--vncproxy_url=http://129.67.24.14:6080
+--vnc_console_proxy_url=http://129.67.24.14:6080
+# network specific settings
+--network_manager=nova.network.manager.FlatDHCPManager
+--public_interface=eth0
+--flat_interface=eth1
+--flat_network_bridge=br100
+### --fixed_range=192.168.22.32/27
+### --floating_range=10.42.0.32/27 
+--fixed_range=192.168.1.0/24
+--floating_range=192.168.0.0/24
+--network_size=32
+--flat_network_dhcp_start=192.168.1.2
+--flat_injected=False
+--force_dhcp_release
+--iscsi_helper=tgtadm
+--connection_type=libvirt
+--root_helper=sudo nova-rootwrap
+--verbose
+--libvirt_use_virtio_for_bridges
+--ec2_private_dns_show
+--novnc_enabled=true
+--novncproxy_base_url=http://129.67.24.14:6080/vnc_auto.html
+--vncserver_proxyclient_address=129.67.24.14
+--vncserver_listen=129.67.24.14
+
+As you can see, many of the entries in this file are self-explanatory; the trickiest bit to get done right is the network configuration part, which you can see at the end of the file. We're using Nova's FlatDHCP network mode; 192.168.22.32/27 is the fixed range from which our future VMs will get their IP addresses, starting with 192.168.22.33. Our flat interface is eth1 (nova-network will bridge this into a bridge named br100), our public interface is eth0. An additional floating range is defined at 10.42.0.32/27 (for those VMs that we want to have a 'public IP'). 
+
+After saving nova.conf, open /etc/nova/api-paste.ini in an editor and scroll down to the end of the file. Adapt it according to the changes you conducted in Glance's paste-files in step 3. Use service as tenant name and nova as username.
+
+Using:
+    admin_tenant_name = service              
+    admin_user = nova          
+    admin_password = @@zoo-patmos
+
+Then, restart all nova services to make the configuration file changes take effect:
+
+    for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-consoleauth; do service "$a" stop; done
+    for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-consoleauth; do service "$a" start; done
+
+The next step will create all databases Nova needs in MySQL. While we are at it, we can also create the network we want to use for our VMs in the Nova databases. Do this:
+
+    nova-manage db sync
+    nova-manage network create private --fixed_range_v4=192.168.1.0/24 --num_networks=1 --bridge=br100 --bridge_interface=eth1 --network_size=250
+
+The first of these commands takes a little while (~30 seconds?), and displays this:
+[[
+    root@zoo-patmos:~# nova-manage db sync
+    2013-02-22 12:20:11 DEBUG nova.utils [-] backend <module 'nova.db.sqlalchemy.migration' from '/usr/lib/python2.7/dist-packages/nova/db/sqlalchemy/migration.pyc'> from (pid=17264) __get_backend /usr/lib/python2.7/dist-packages/nova/utils.py:662
+
+    2013-02-22 12:20:32 WARNING nova.utils [-] /usr/lib/python2.7/dist-packages/sqlalchemy/pool.py:639: SADeprecationWarning: The 'listeners' argument to Pool (and create_engine()) is deprecated.  Use event.listen().
+      Pool.__init__(self, creator, **kw)
+
+    2013-02-22 12:20:33 WARNING nova.utils [-] /usr/lib/python2.7/dist-packages/sqlalchemy/pool.py:145: SADeprecationWarning: Pool.add_listener is deprecated.  Use event.listen()
+      self.add_listener(l)
+
+    2013-02-22 12:20:33 AUDIT nova.db.sqlalchemy.fix_dns_domains [-] Applying database fix for Essex dns_domains table.
+]]
+
+Also, make sure that all files in /etc/nova belong to the nova user and the nova group:
+
+    chown -R nova:nova /etc/nova
+
+Then, restart all nova-related services again:
+
+    for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-consoleauth; do service "$a" stop; done
+    for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-consoleauth; do service "$a" start; done
+
+You should now see all these nova-* processes when doing ps auxw. And you should be able to use the numerous nova commands. For example,
+
+    nova list
+
+should give you a list of all currently running VMs (none, the list should be empty). And 
+
+    nova image-list
+
+should show a list of the image you uploaded to Glance in the step before. If that's the case, Nova is working as expected and you can carry on with starting your first VM.
+
+----
+
+Step 6: Your first VM
+
+Once Nova works as desired, starting your first own cloud VM is easy. As we're using a Ubuntu image for this example which allows for SSH-key based login only, we first need to store a public SSH key for our admin user in the OpenStack database. Upload the file containing your SSH public key onto the server (I'll assume the file is called id_dsa.pub) and do this:
+
+    nova keypair-add --pub_key id_rsa.pub key1
+
+This will add the key to OpenStack Nova and store it with the name "key1". The only thing left to do after this is firing up your VM. Find out what ID your Ubuntu image has, you can do this with:
+
+    nova image-list
+
+When starting a VM, you also need to define the flavor it is supposed to use. Flavors are pre-defined hardware schemes in OpenStack with which you can define what resources your newly created VM has. OpenStack comes with five pre-defined flavors; you can get an overview over the existing flavors with
+
+    nova flavor-list
+
+Flavors are referenced by their ID, not by  their name. That's important for the actual command to execute to start your VM. That command's syntax basically is this:
+
+    nova boot --flavor ID --image Image-UUID --key_name key-name vm_name
+
+So let's assume you want to start a VM with the m1.tiny flavor, which has the ID 1. Let's further assume that your image's UUID in Glance is 9bab7ce7-7523-4d37-831f-c18fbc5cb543 and that you want to use the SSH key key1. Last but nut least, you want your new VM to have the name superfrobnicator. Here's the command you would need to start that particular VM:
+
+    nova boot --flavor 1 --image d38e3be0-d28e-48d5-a9fc-309151e8bfb3 --key_name gklyne gktestvm1
+
+After hitting the Enter key, Nova will show you a summary with all important details concerning the new VM. After some seconds, issue the command
+
+    nova show gktestvm1
+
+In the line with the private_network keyword, you'll see the IP address that Nova has assigned this particular VM. As soon as the VMs status is ACTIVE, you should be able to log into that VM by issuing
+
+    ssh -i Private-Key ubuntu@IP
+
+Of course Private-Key needs to be replaced with the path to your SSH private key and IP needs to be replaced with the VMs actual IP. If you're using SSH agent forwarding, you can leave out the "-i"-parameter altogether. 
+
+Also note:
+
+    nova delete gktestvm1
+
+and lots of other comments.  See:
+
+    nova help
+
+
+Step 7: The OpenStack Dashboard
+
+We can use Nova to start and stop virtual machines now, but up to this point, we can only do it on the command line. That's not good, because typically, we'll want users without high-level administrator skills to be able to start new VMs. There's a solution for this on the OpenStack ecosystem called Dashboard, codename Horizon. Horizon is OpenStack's main configuration interface. It's django-based.
+
+Let's get going with it:
+
+    apt-get install apache2 libapache2-mod-wsgi openstack-dashboard
+
+Note: Make sure to install at least the version 2012.1-0ubuntu6 of the openstack-dashboard package, as it contains some changes important for the dashboard to work properly.
+
+Then, open /etc/openstack-dashboard/local_settings.py in an editor. Go to the line starting with CACHE_BACKEND and make sure it looks like this:
+
+    CACHE_BACKEND = 'memcached://127.0.0.1:11211/'
+
+Now restart Apache with
+
+    service apache2 restart
+
+If necessary, ensure HTTP traffic can get through any firewall to the host system.
+
+After this, point your webbrowser to the Nova machine's IP address and you should see the OpenStack Dashboard login prompt. Login with admin and the password you specified. That's it - you're in!
+
+Login with keystone credentials; e.g.
+    glance / @@password
+
+----
+
+Appendix A: Making nova-volume work
+
+nova-volume is the OpenStack Compute component that will allow you to assign persistent storage devices to your virtual machines. Internally, it's using iSCSI, which is why you installed the tgt package earlier.
+
+Assuming that you have a local LVM volume group entitled nova-volumes, you can try assigning a 1G large volume to our superfrobnicator VM by using these commands to create a 1G large volume and assign it accordingly: 
+
+    nova volume-create --display_name "volume1" 1
+    nova volume-attach superfrobnicator 1 /dev/vdb
+
+Please take particular note of the parameter between superfrobnicator and /dev/vdb in this example. It refers to the actual ID of the volume. To find out a volume's ID, you can do
+
+    nova volume-list
+
+and then use the value from the "ID" field for a specific volume. If everything went well, you'll see a new disk device in the superfrobnicator VM now, /dev/vdb. 
+
+----
+
+Appendix B: Using floating IPs
+
+Floating IPs are an unbelievably handy tool in OpenStack to supply your virtual machines with "official" IP addresses. In this example, we've mainly been dealing with the 192.168.22.0/24 network, which is the "internal" network for our VMs. Our VMs can communicate with each other and they can communicate with the outside world, but they don't have an official IP address that others could connect to (the "public" net in this test-setup is 10.42.0.0/24 after all). Floating IPs allow you to assign your VMs an additional IP from that "public" network, making them accessible directly. And using floating IPs is anything but hard!
+
+First, you'll have to define a range of addresses which OpenStack nova will use. Our old friend nova-manage does this: 
+
+    nova-manage floating create --ip_range=10.42.0.32/27
+
+Then, within Nova itself, you'll have to create a floating IP (creating here is Nova-speak for "reserving"):
+
+    nova floating-ip-create  
+
+This command will print out an IP address (in this example it's 10.42.0.35) that you will need in the next step. To assign this IP to our superfrobnicator VM, use this command: 
+
+    nova add-floating-ip superfrobnicator 10.42.0.35
+
+Please note: Assigning a floating IP to an existing VM does automatically enable that IP for the VM. You'll not have to manually assign the IP to the VMs main network interface, as all the networking magic is done by iptables on the actual compute node.
+
+That's it! Your new VM can now use its floating IP. There is only one problem left: By default, nova uses very secure iptables rules to protect IPs reachable via floating IPs from abuse. De facto, nova will not allow any traffic from the outside to get through to your VM. We'll have to fiddle with Security Groups to solve this problem. Here's how you can enable SSH access and ICMP to your floating IPs:
+
+    nova secgroup-add-rule default tcp 22 22 0.0.0.0/0
+    nova secgroup-add-rule default icmp -1 -1 0.0.0.0/0
+
+After this, your VM will be reachable directly from the outside via its floating IP address (by SSH and ICMP).
+
+
+
+------------------------------------------------------------------------------------------
+
+Notes:
+
+Images are stored in /var/lib/glance/images using id (uuid) as file name
+
+
+------------------------------------------------------------------------------------------
+
+
+keystone_data.sh:
+
+    #!/bin/bash
+    #
+    # Initial data for Keystone using python-keystoneclient
+    #
+    # Tenant               User      Roles
+    # ------------------------------------------------------------------
+    # admin                admin     admin
+    # service              glance    admin
+    # service              nova      admin, [ResellerAdmin (swift only)]
+    # service              quantum   admin        # if enabled
+    # service              swift     admin        # if enabled
+    # demo                 admin     admin
+    # demo                 demo      Member, anotherrole
+    # invisible_to_admin   demo      Member
+    #
+    # Variables set before calling this script:
+    # SERVICE_TOKEN - aka admin_token in keystone.conf
+    # SERVICE_ENDPOINT - local Keystone admin endpoint
+    # SERVICE_TENANT_NAME - name of tenant containing service accounts
+    # ENABLED_SERVICES - stack.sh's list of services to start
+    # DEVSTACK_DIR - Top-level DevStack directory
+
+    ADMIN_PASSWORD=${ADMIN_PASSWORD:-hastexo}
+    SERVICE_PASSWORD=${SERVICE_PASSWORD:-$ADMIN_PASSWORD}
+    export SERVICE_TOKEN="zoo-patmos"
+    export SERVICE_ENDPOINT="http://localhost:35357/v2.0"
+    SERVICE_TENANT_NAME=${SERVICE_TENANT_NAME:-service}
+    ENABLED_SERVICES="swift"
+
+    function get_id () {
+        echo `$@ | awk '/ id / { print $4 }'`
+    }
+
+    # Tenants
+    ADMIN_TENANT=$(get_id keystone tenant-create --name=admin)
+    SERVICE_TENANT=$(get_id keystone tenant-create --name=$SERVICE_TENANT_NAME)
+    DEMO_TENANT=$(get_id keystone tenant-create --name=demo)
+    INVIS_TENANT=$(get_id keystone tenant-create --name=invisible_to_admin)
+
+
+    # Users
+    ADMIN_USER=$(get_id keystone user-create --name=admin \
+                                             --pass="$ADMIN_PASSWORD" \
+                                             --email=admin@hastexo.com)
+    DEMO_USER=$(get_id keystone user-create --name=demo \
+                                            --pass="$ADMIN_PASSWORD" \
+                                            --email=demo@hastexo.com)
+
+
+    # Roles
+    ADMIN_ROLE=$(get_id keystone role-create --name=admin)
+    KEYSTONEADMIN_ROLE=$(get_id keystone role-create --name=KeystoneAdmin)
+    KEYSTONESERVICE_ROLE=$(get_id keystone role-create --name=KeystoneServiceAdmin)
+    # ANOTHER_ROLE demonstrates that an arbitrary role may be created and used
+    # TODO(sleepsonthefloor): show how this can be used for rbac in the future!
+    ANOTHER_ROLE=$(get_id keystone role-create --name=anotherrole)
+
+
+    # Add Roles to Users in Tenants
+    keystone user-role-add --user $ADMIN_USER --role $ADMIN_ROLE --tenant_id $ADMIN_TENANT
+    keystone user-role-add --user $ADMIN_USER --role $ADMIN_ROLE --tenant_id $DEMO_TENANT
+    keystone user-role-add --user $DEMO_USER --role $ANOTHER_ROLE --tenant_id $DEMO_TENANT
+
+    # TODO(termie): these two might be dubious
+    keystone user-role-add --user $ADMIN_USER --role $KEYSTONEADMIN_ROLE --tenant_id $ADMIN_TENANT
+    keystone user-role-add --user $ADMIN_USER --role $KEYSTONESERVICE_ROLE --tenant_id $ADMIN_TENANT
+
+
+    # The Member role is used by Horizon and Swift so we need to keep it:
+    MEMBER_ROLE=$(get_id keystone role-create --name=Member)
+    keystone user-role-add --user $DEMO_USER --role $MEMBER_ROLE --tenant_id $DEMO_TENANT
+    keystone user-role-add --user $DEMO_USER --role $MEMBER_ROLE --tenant_id $INVIS_TENANT
+
+
+    # Configure service users/roles
+    NOVA_USER=$(get_id keystone user-create --name=nova \
+                                            --pass="$SERVICE_PASSWORD" \
+                                            --tenant_id $SERVICE_TENANT \
+                                            --email=nova@hastexo.com)
+    keystone user-role-add --tenant_id $SERVICE_TENANT \
+                           --user $NOVA_USER \
+                           --role $ADMIN_ROLE
+
+    GLANCE_USER=$(get_id keystone user-create --name=glance \
+                                              --pass="$SERVICE_PASSWORD" \
+                                              --tenant_id $SERVICE_TENANT \
+                                              --email=glance@hastexo.com)
+    keystone user-role-add --tenant_id $SERVICE_TENANT \
+                           --user $GLANCE_USER \
+                           --role $ADMIN_ROLE
+
+    if [[ "$ENABLED_SERVICES" =~ "swift" ]]; then
+        SWIFT_USER=$(get_id keystone user-create --name=swift \
+                                                 --pass="$SERVICE_PASSWORD" \
+                                                 --tenant_id $SERVICE_TENANT \
+                                                 --email=swift@hastexo.com)
+        keystone user-role-add --tenant_id $SERVICE_TENANT \
+                               --user $SWIFT_USER \
+                               --role $ADMIN_ROLE
+        # Nova needs ResellerAdmin role to download images when accessing
+        # swift through the s3 api. The admin role in swift allows a user
+        # to act as an admin for their tenant, but ResellerAdmin is needed
+        # for a user to act as any tenant. The name of this role is also
+        # configurable in swift-proxy.conf
+        RESELLER_ROLE=$(get_id keystone role-create --name=ResellerAdmin)
+        keystone user-role-add --tenant_id $SERVICE_TENANT \
+                               --user $NOVA_USER \
+                               --role $RESELLER_ROLE
+    fi
+
+    if [[ "$ENABLED_SERVICES" =~ "quantum" ]]; then
+        QUANTUM_USER=$(get_id keystone user-create --name=quantum \
+                                                   --pass="$SERVICE_PASSWORD" \
+                                                   --tenant_id $SERVICE_TENANT \
+                                                   --email=quantum@hastexo.com)
+        keystone user-role-add --tenant_id $SERVICE_TENANT \
+                               --user $QUANTUM_USER \
+                               --role $ADMIN_ROLE
+    fi
+
+
+
+endpoints.sh
+
+    #!/bin/sh
+
+    # Author:       Martin Gerhard Loschwitz
+    # (c) 2012      hastexo Professional Services GmbH
+
+    # Licensed under the Apache License, Version 2.0 (the "License");
+    # you may not use this file except in compliance with the License.
+    # You may obtain a copy of the License at
+    # 
+    #    http://www.apache.org/licenses/LICENSE-2.0
+    # 
+    # Unless required by applicable law or agreed to in writing, software
+    # distributed under the License is distributed on an "AS IS" BASIS,
+    # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    # See the License for the specific language governing permissions and
+    # limitations under the License.
+    # 
+    # On Debian-based systems the full text of the Apache version 2.0 
+    # license can be found in `/usr/share/common-licenses/Apache-2.0'.
+
+    # MySQL definitions
+    MYSQL_USER=keystone
+    MYSQL_DATABASE=keystone
+    MYSQL_HOST=localhost
+
+    # other definitions
+    MASTER=localhost
+
+    while getopts "u:D:p:m:K:R:E:S:T:vh" opt; do
+      case $opt in
+        u)
+          MYSQL_USER=$OPTARG
+          ;;
+        D)
+          MYSQL_DATABASE=$OPTARG
+          ;;
+        p)
+          MYSQL_PASSWORD=$OPTARG
+          ;;
+        m)
+          MYSQL_HOST=$OPTARG
+          ;;
+        K)
+          MASTER=$OPTARG
+          ;;
+        R)
+          KEYSTONE_REGION=$OPTARG
+          ;;
+        E)
+          export SERVICE_ENDPOINT=$OPTARG
+          ;;
+        S)
+          SWIFT_MASTER=$OPTARG
+          ;;
+        T)
+          export SERVICE_TOKEN=$OPTARG
+          ;;
+        v)
+          set -x
+          ;;
+        h)
+          cat <<EOF
+    Usage: $0 [-m mysql_hostname] [-u mysql_username] [-D mysql_database] [-p mysql_password]
+           [-K keystone_master ] [ -R keystone_region ] [ -E keystone_endpoint_url ] 
+           [ -S swift_master ] [ -T keystone_token ]
+          
+    Add -v for verbose mode, -h to display this message.
+    EOF
+          exit 0
+          ;;
+        \?)
+          echo "Unknown option -$OPTARG" >&2
+          exit 1
+          ;;
+        :)
+          echo "Option -$OPTARG requires an argument" >&2
+          exit 1
+          ;;
+      esac
+    done  
+
+    if [ -z "$KEYSTONE_REGION" ]; then
+      echo "Keystone region not set. Please set with -R option or set KEYSTONE_REGION variable." >&2
+      missing_args="true"
+    fi
+
+    if [ -z "$SERVICE_TOKEN" ]; then
+      echo "Keystone service token not set. Please set with -T option or set SERVICE_TOKEN variable." >&2
+      missing_args="true"
+    fi
+
+    if [ -z "$SERVICE_ENDPOINT" ]; then
+      echo "Keystone service endpoint not set. Please set with -E option or set SERVICE_ENDPOINT variable." >&2
+      missing_args="true"
+    fi
+
+    if [ -z "$MYSQL_PASSWORD" ]; then
+      echo "MySQL password not set. Please set with -p option or set MYSQL_PASSWORD variable." >&2
+      missing_args="true"
+    fi
+
+    if [ -n "$missing_args" ]; then
+      exit 1
+    fi
+ 
+    keystone service-create --name nova --type compute --description 'OpenStack Compute Service'
+    keystone service-create --name volume --type volume --description 'OpenStack Volume Service'
+    keystone service-create --name glance --type image --description 'OpenStack Image Service'
+    keystone service-create --name swift --type object-store --description 'OpenStack Storage Service'
+    keystone service-create --name keystone --type identity --description 'OpenStack Identity'
+    keystone service-create --name ec2 --type ec2 --description 'OpenStack EC2 service'
+
+    create_endpoint () {
+      case $1 in
+        compute)
+        keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$MASTER"':8774/v2/%(tenant_id)s' --adminurl 'http://'"$MASTER"':8774/v2/%(tenant_id)s' --internalurl 'http://'"$MASTER"':8774/v2/%(tenant_id)s'
+        ;;
+        volume)
+        keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$MASTER"':8776/v1/%(tenant_id)s' --adminurl 'http://'"$MASTER"':8776/v1/%(tenant_id)s' --internalurl 'http://'"$MASTER"':8776/v1/%(tenant_id)s'
+        ;;
+        image)
+        keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$MASTER"':9292/v1' --adminurl 'http://'"$MASTER"':9292/v1' --internalurl 'http://'"$MASTER"':9292/v1'
+        ;;
+        object-store)
+        if [ $SWIFT_MASTER ]; then
+          keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$SWIFT_MASTER"':8080/v1/AUTH_%(tenant_id)s' --adminurl 'http://'"$SWIFT_MASTER"':8080/v1' --internalurl 'http://'"$SWIFT_MASTER"':8080/v1/AUTH_%(tenant_id)s'
+        else
+          keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$MASTER"':8080/v1/AUTH_%(tenant_id)s' --adminurl 'http://'"$MASTER"':8080/v1' --internalurl 'http://'"$MASTER"':8080/v1/AUTH_%(tenant_id)s'
+        fi
+        ;;
+        identity)
+        keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$MASTER"':5000/v2.0' --adminurl 'http://'"$MASTER"':35357/v2.0' --internalurl 'http://'"$MASTER"':5000/v2.0'
+        ;;
+        ec2)
+        keystone endpoint-create --region $KEYSTONE_REGION --service_id $2 --publicurl 'http://'"$MASTER"':8773/services/Cloud' --adminurl 'http://'"$MASTER"':8773/services/Admin' --internalurl 'http://'"$MASTER"':8773/services/Cloud'
+        ;;
+      esac
+    }
+
+    for i in compute volume image object-store identity ec2; do
+      id=`mysql -h "$MYSQL_HOST" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" -ss -e "SELECT id FROM service WHERE type='"$i"';"` || exit 1
+      create_endpoint $i $id
+    done

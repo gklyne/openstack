@@ -1,0 +1,64 @@
+   3  ufw status
+    4  ufw enable
+    5  ufw allow ssh
+    6  ufw status
+    7  apt-get install denyhosts
+    8  apt-get update
+    9  apt-get upgrade
+   11  apt-get install ntp
+   12  nano /etc/ntp.conf
+   13  service ntp restart
+   16  apt-get install tgt
+   17  service tgt start
+   18  service tgt restart
+   19  apt-get install open-iscsi open-iscsi-utils
+   20  nano /etc/network/interfaces
+   21  service networking restart
+   23  apt-get install bridge-utils
+   24  apt-get install rabbitmq-server memcached python-memcache
+   25  apt-get install kvm libvirt-bin
+
+
+   35  apt-get install mysql-server python-mysqldb
+   36  nano /etc/mysql/my.cnf
+   37  service mysql restart
+   38  mysql -u root -p
+   39  apt-get install keystone python-keystone python-mysqldb python-keystoneclient
+   40  nano /etc/keystone/keystone.conf
+   41  service keystone restart
+   42  keystone-manage db_sync
+   43  nano keystone_data.sh
+   48  chmod +x keystone_data.sh
+   49  ./keystone_data.sh
+   51  service keystone restart
+
+   60  nano endpoints.sh
+   61  chmod +x *.sh
+   59  ./endpoints.sh -m 129.67.24.14 -u keystonedbadmin -D keystone -p Ue0Ud7ra -K 129.67.24.14 -R RegionOne \
+                      -E "http://localhost:35357/v2.0" -S 129.67.24.14 -T zoo-patmos
+
+   68  apt-get install glance glance-api glance-client glance-common glance-registry python-glance
+   69  nano /etc/glance/glance-api-paste.ini
+   70  nano /etc/glance/glance-registry-paste.ini
+   74  nano /etc/glance/glance-registry.conf
+   75  nano /etc/glance/glance-api.conf
+   76  glance-manage version_control 0
+   77  glance-manage db_sync
+   78  service glance-api restart && service glance-registry restart
+   82  glance index
+   91  wget http://uec-images.ubuntu.com/releases/12.04/release/ubuntu-12.04-server-cloudimg-amd64-disk1.img
+   92  glance add name="Ubuntu 12.04 cloudimg amd64" is_public=true container_format=ovf disk_format=qcow2 < ubuntu-12.04-server-cl$
+   93  glance index
+
+   94  apt-get install nova-api nova-cert nova-common nova-compute nova-compute-kvm nova-doc nova-network nova-objectstore nova-sch$
+   95  nano /etc/nova/nova.conf
+   96  nano /etc/nova/api-paste.ini
+   97  for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-con$
+   98  for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-con$
+   99  nova-manage db sync
+  100  nova-manage network create private --fixed_range_v4=192.168.1.0/24 --num_networks=1 --bridge=br100 --bridge_interface=eth1 -$
+  102  chown -R nova:nova /etc/nova
+  103  for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-con$
+  104  for a in libvirt-bin nova-network nova-compute nova-cert nova-api nova-objectstore nova-scheduler nova-volume novnc nova-con$
+  105  nova list
+  106  nova image-list
